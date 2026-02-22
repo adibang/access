@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>User Manager untuk POSPLUS</title>
+    <title>User & Role Manager untuk POSPLUS</title>
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 20px auto; padding: 0 20px; background: #f5f5f5; }
         .container { background: white; border-radius: 15px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
@@ -23,9 +23,26 @@
 </head>
 <body>
     <div class="container">
-        <h2>User Manager untuk POSPLUS</h2>
-        <p>Buat akun pengguna (admin/kasir) yang akan diekspor ke file JSON. File ini kemudian di-import ke aplikasi POSPLUS melalui tombol "Import Data" di layar login.</p>
+        <h2>User & Role Manager untuk POSPLUS</h2>
+        <p>Buat role dan user yang akan diekspor ke file JSON. File ini kemudian di-import ke aplikasi POSPLUS melalui tombol "Import Data" di layar login.</p>
         
+        <h3>Tambah Role</h3>
+        <div class="form-group">
+            <label>Nama Role</label>
+            <input type="text" id="roleName" placeholder="Misal: Manager">
+        </div>
+        <div class="form-group">
+            <label>Permission (centang menu yang dapat diakses)</label>
+            <div id="permissionCheckboxes" style="border:1px solid #ddd; border-radius:10px; padding:10px;">
+                <!-- Akan diisi javascript -->
+            </div>
+        </div>
+        <button onclick="addRole()">Tambah Role</button>
+        <button class="secondary" onclick="resetRoles()">Reset ke Default</button>
+
+        <hr style="margin:20px 0;">
+
+        <h3>Tambah User</h3>
         <div class="form-group">
             <label>Username</label>
             <input type="text" id="username" placeholder="username">
@@ -40,45 +57,127 @@
         </div>
         <div class="form-group">
             <label>Role</label>
-            <select id="role">
-                <option value="admin">Admin</option>
-                <option value="kasir">Kasir</option>
-            </select>
+            <select id="roleSelect"></select>
         </div>
         <button onclick="addUser()">Tambah User</button>
-        <button class="secondary" onclick="clearList()">Hapus Semua</button>
+        <button class="secondary" onclick="clearUsers()">Hapus Semua User</button>
 
-        <div class="user-list" id="userList"></div>
+        <div class="user-list">
+            <h3>Daftar Role</h3>
+            <div id="roleList"></div>
+            <h3>Daftar User</h3>
+            <div id="userList"></div>
+        </div>
 
-        <button class="export-btn" onclick="exportUsers()">📥 Ekspor ke File JSON</button>
+        <button class="export-btn" onclick="exportData()">📥 Ekspor ke File JSON</button>
     </div>
 
     <div id="notification" class="notification"></div>
 
     <script>
+        // Daftar semua menu (harus sama dengan di index.html)
+        const ALL_MENUS = [
+            { id: 'menu-master', label: 'Master Data' },
+            { id: 'menu-transaksi', label: 'Transaksi' },
+            { id: 'menu-cust', label: 'Cust & Supl' },
+            { id: 'menu-inventory', label: 'Inventory' },
+            { id: 'menu-laporan', label: 'Laporan' },
+            { id: 'menu-pembelian', label: 'Pembelian' }
+        ];
+
+        // Data roles dan users
+        let roles = [
+            { id: 1, name: 'Admin', permissions: ALL_MENUS.map(m => m.id) },
+            { id: 2, name: 'Kasir', permissions: ['menu-transaksi', 'menu-cust'] }
+        ];
         let users = [];
 
-        // Fungsi hash password (sama dengan di POSPLUS)
-        async function hashPassword(password) {
-            if (window.crypto && window.crypto.subtle) {
-                try {
-                    const encoder = new TextEncoder();
-                    const data = encoder.encode(password);
-                    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-                    const hashArray = Array.from(new Uint8Array(hashBuffer));
-                    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-                } catch (e) {
-                    console.warn('Crypto digest failed, using fallback', e);
-                }
+        // Inisialisasi: render permission checkboxes, role list, user list
+        function init() {
+            renderPermissionCheckboxes();
+            renderRoleSelect();
+            renderRoleList();
+            renderUserList();
+        }
+
+        // Render checkbox permission untuk tambah role
+        function renderPermissionCheckboxes(selectedPerms = []) {
+            const container = document.getElementById('permissionCheckboxes');
+            let html = '';
+            ALL_MENUS.forEach(menu => {
+                const checked = selectedPerms.includes(menu.id) ? 'checked' : '';
+                html += `
+                    <div style="margin-bottom:5px;">
+                        <input type="checkbox" id="perm-${menu.id}" value="${menu.id}" ${checked}>
+                        <label for="perm-${menu.id}">${menu.label}</label>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        // Render select role untuk form user
+        function renderRoleSelect(selectedId = null) {
+            const select = document.getElementById('roleSelect');
+            select.innerHTML = '';
+            roles.forEach(role => {
+                const option = document.createElement('option');
+                option.value = role.id;
+                option.textContent = role.name;
+                if (role.id === selectedId) option.selected = true;
+                select.appendChild(option);
+            });
+        }
+
+        // Render daftar role
+        function renderRoleList() {
+            const container = document.getElementById('roleList');
+            if (roles.length === 0) {
+                container.innerHTML = '<p style="color:#666;">Belum ada role.</p>';
+                return;
             }
-            // Fallback sederhana (jika crypto tidak tersedia)
-            let hash = 0;
-            for (let i = 0; i < password.length; i++) {
-                const char = password.charCodeAt(i);
-                hash = ((hash << 5) - hash) + char;
-                hash |= 0;
+            let html = '';
+            roles.forEach((role, index) => {
+                const permLabels = role.permissions.map(pid => {
+                    const menu = ALL_MENUS.find(m => m.id === pid);
+                    return menu ? menu.label : pid;
+                }).join(', ');
+                html += `
+                    <div class="user-item">
+                        <div class="info">
+                            <strong>${role.name}</strong> (ID: ${role.id})<br>
+                            <small>Permission: ${permLabels}</small>
+                        </div>
+                        <div>
+                            <button onclick="editRole(${role.id})" style="margin-right:5px;">Edit</button>
+                            ${role.name !== 'Admin' && role.name !== 'Kasir' ? `<button onclick="deleteRole(${role.id})" class="secondary">Hapus</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        // Render daftar user
+        function renderUserList() {
+            const container = document.getElementById('userList');
+            if (users.length === 0) {
+                container.innerHTML = '<p style="color:#666;">Belum ada user.</p>';
+                return;
             }
-            return hash.toString(16);
+            let html = '';
+            users.forEach((user, index) => {
+                const roleName = roles.find(r => r.id === user.roleId)?.name || '-';
+                html += `
+                    <div class="user-item">
+                        <div class="info">
+                            <strong>${user.name}</strong> (${user.username}) - ${roleName}
+                        </div>
+                        <button onclick="removeUser(${index})">Hapus</button>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
         }
 
         // Notifikasi
@@ -90,40 +189,120 @@
             setTimeout(() => { notif.style.display = 'none'; }, 2000);
         }
 
-        // Render daftar user
-        function renderUserList() {
-            const listDiv = document.getElementById('userList');
-            if (users.length === 0) {
-                listDiv.innerHTML = '<p style="color:#666;">Belum ada user.</p>';
-                return;
+        // Hash password (sama dengan di index.html)
+        async function hashPassword(password) {
+            if (window.crypto && window.crypto.subtle) {
+                try {
+                    const encoder = new TextEncoder();
+                    const data = encoder.encode(password);
+                    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                    const hashArray = Array.from(new Uint8Array(hashBuffer));
+                    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                } catch (e) { console.warn('Crypto digest failed, using fallback', e); }
             }
-            let html = '';
-            users.forEach((user, index) => {
-                html += `
-                    <div class="user-item">
-                        <div class="info">
-                            <strong>${user.name}</strong> (${user.username}) - ${user.role}
-                        </div>
-                        <button onclick="removeUser(${index})">Hapus</button>
-                    </div>
-                `;
-            });
-            listDiv.innerHTML = html;
+            let hash = 0;
+            for (let i = 0; i < password.length; i++) {
+                const char = password.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash |= 0;
+            }
+            return hash.toString(16);
         }
 
-        // Tambah user baru
+        // ==================== ROLE CRUD ====================
+        function addRole() {
+            const name = document.getElementById('roleName').value.trim();
+            if (!name) {
+                showNotification('Nama role harus diisi', 'error');
+                return;
+            }
+            // Cek duplikasi nama
+            if (roles.some(r => r.name.toLowerCase() === name.toLowerCase())) {
+                showNotification('Nama role sudah ada', 'error');
+                return;
+            }
+            // Ambil permission yang dicentang
+            const checkboxes = document.querySelectorAll('#permissionCheckboxes input[type="checkbox"]');
+            const permissions = [];
+            checkboxes.forEach(cb => {
+                if (cb.checked) permissions.push(cb.value);
+            });
+            // Cari id baru (angka tertinggi + 1)
+            const newId = roles.length > 0 ? Math.max(...roles.map(r => r.id)) + 1 : 3;
+            const now = new Date().toISOString();
+            roles.push({
+                id: newId,
+                name: name,
+                permissions: permissions,
+                createdAt: now,
+                updatedAt: now
+            });
+            // Reset form
+            document.getElementById('roleName').value = '';
+            renderPermissionCheckboxes([]);
+            renderRoleSelect();
+            renderRoleList();
+            showNotification('Role ditambahkan');
+        }
+
+        function editRole(roleId) {
+            const role = roles.find(r => r.id === roleId);
+            if (!role) return;
+            const newName = prompt('Edit nama role:', role.name);
+            if (newName && newName.trim() !== '') {
+                if (roles.some(r => r.id !== roleId && r.name.toLowerCase() === newName.toLowerCase())) {
+                    showNotification('Nama role sudah ada', 'error');
+                    return;
+                }
+                role.name = newName.trim();
+                role.updatedAt = new Date().toISOString();
+                renderRoleList();
+                renderRoleSelect();
+                showNotification('Role diperbarui');
+            }
+        }
+
+        function deleteRole(roleId) {
+            if (!confirm('Hapus role ini? User dengan role ini akan kehilangan role.')) return;
+            // Update user yang menggunakan role ini menjadi null
+            users.forEach(u => {
+                if (u.roleId === roleId) u.roleId = null;
+            });
+            roles = roles.filter(r => r.id !== roleId);
+            renderRoleList();
+            renderRoleSelect();
+            renderUserList();
+            showNotification('Role dihapus');
+        }
+
+        function resetRoles() {
+            if (!confirm('Reset role ke default (Admin & Kasir)? Semua role kustom akan hilang.')) return;
+            roles = [
+                { id: 1, name: 'Admin', permissions: ALL_MENUS.map(m => m.id) },
+                { id: 2, name: 'Kasir', permissions: ['menu-transaksi', 'menu-cust'] }
+            ];
+            // Set user yang menggunakan role di luar 1/2 menjadi null
+            users.forEach(u => {
+                if (u.roleId !== 1 && u.roleId !== 2) u.roleId = null;
+            });
+            renderPermissionCheckboxes([]);
+            renderRoleSelect();
+            renderRoleList();
+            renderUserList();
+            showNotification('Role direset');
+        }
+
+        // ==================== USER CRUD ====================
         async function addUser() {
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value.trim();
             const name = document.getElementById('fullname').value.trim();
-            const role = document.getElementById('role').value;
+            const roleId = parseInt(document.getElementById('roleSelect').value) || null;
 
             if (!username || !password || !name) {
                 showNotification('Semua field harus diisi', 'error');
                 return;
             }
-
-            // Cek duplikat username
             if (users.some(u => u.username === username)) {
                 showNotification('Username sudah ada', 'error');
                 return;
@@ -136,8 +315,8 @@
                 // id tidak disertakan, biarkan database yang menggenerate
                 username,
                 password: hashed,
-                role,
                 name,
+                roleId, // integer, bisa null
                 createdAt: now,
                 updatedAt: now
             });
@@ -146,38 +325,38 @@
             document.getElementById('username').value = '';
             document.getElementById('password').value = '';
             document.getElementById('fullname').value = '';
-            document.getElementById('role').value = 'admin';
 
             renderUserList();
             showNotification('User ditambahkan');
         }
 
-        // Hapus user
         function removeUser(index) {
             users.splice(index, 1);
             renderUserList();
             showNotification('User dihapus');
         }
 
-        // Hapus semua
-        function clearList() {
+        function clearUsers() {
             if (users.length === 0) return;
             if (confirm('Hapus semua user?')) {
                 users = [];
                 renderUserList();
+                showNotification('Semua user dihapus');
             }
         }
 
-        // Ekspor ke file JSON
-        function exportUsers() {
-            if (users.length === 0) {
-                showNotification('Tidak ada user untuk diekspor', 'error');
+        // ==================== EKSPOR ====================
+        function exportData() {
+            if (roles.length === 0 && users.length === 0) {
+                showNotification('Tidak ada data untuk diekspor', 'error');
                 return;
             }
 
             const exportData = {
-                users: users
-                // Bisa juga menambahkan properti lain jika diperlukan, tapi POSPLUS hanya akan membaca users
+                roles: roles,
+                users: users,
+                exportDate: new Date().toISOString(),
+                version: 18 // versi database terbaru
             };
 
             const dataStr = JSON.stringify(exportData, null, 2);
@@ -185,13 +364,16 @@
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `users_backup_${new Date().toISOString().split('T')[0]}.json`;
+            link.download = `posplus_backup_${new Date().toISOString().split('T')[0]}.json`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
             showNotification('File berhasil diunduh');
         }
+
+        // Jalankan init saat halaman dimuat
+        window.onload = init;
     </script>
 </body>
 </html>
