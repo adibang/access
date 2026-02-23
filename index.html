@@ -94,6 +94,11 @@
             outline: none;
             box-shadow: 0 0 0 3px rgba(0,107,84,0.1);
         }
+        input[type="checkbox"] {
+            appearance: auto;
+            -webkit-appearance: checkbox; /* untuk browser lama */
+        }
+
         .permission-group {
             border: 1px solid #ddd;
             border-radius: 15px;
@@ -119,7 +124,7 @@
             font-weight: normal;
             font-size: 0.95rem;
         }
-
+        
         /* ==================== PASSWORD WRAPPER (SHOW/HIDE) ==================== */
         .password-wrapper {
             position: relative;
