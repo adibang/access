@@ -460,7 +460,7 @@
                 <div id="userList"></div>
             </div>
 
-            <!-- Tombol Ekspor (tetap dipertahankan) -->
+            <!-- Tombol Ekspor -->
             <button class="export-btn" onclick="exportData()">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -499,12 +499,10 @@
             { id: 'menu-consignment', label: 'Konsinyasi' }
         ];
 
-
         // Global variables
         let db = null;
         let roles = [];
         let users = [];
-        let currentUser = null;
 
         // ==================== FUNGSI DATABASE ====================
         async function initDatabase() {
@@ -617,28 +615,6 @@
             return div.innerHTML;
         }
 
-        // ==================== CEK LOGIN & PERMISSION ====================
-        function checkAccess() {
-            const savedUser = sessionStorage.getItem('currentUser');
-            if (!savedUser) {
-                alert('Anda harus login terlebih dahulu.');
-                window.location.href = 'index.html';
-                return false;
-            }
-            try {
-                currentUser = JSON.parse(savedUser);
-                if (!currentUser.permissions || !currentUser.permissions.includes('menu-sistem')) {
-                    alert('Anda tidak memiliki akses ke halaman ini.');
-                    window.location.href = 'index.html';
-                    return false;
-                }
-                return true;
-            } catch (e) {
-                window.location.href = 'index.html';
-                return false;
-            }
-        }
-
         // ==================== LOAD DATA DARI DATABASE ====================
         async function loadRoles() {
             roles = await dbGetAll(STORES.ROLES);
@@ -736,7 +712,7 @@
                 return;
             }
             let html = '';
-            users.forEach((user, index) => {
+            users.forEach((user) => {
                 const roleName = roles.find(r => r.id === user.roleId)?.name || '-';
                 html += `
                     <div class="list-item">
@@ -942,7 +918,7 @@
             }
         };
 
-        // ==================== FUNGSI EKSPOR (sesuai dengan aplikasi utama) ====================
+        // ==================== FUNGSI EKSPOR (kompatibel dengan aplikasi utama) ====================
         window.exportData = async function() {
             if (roles.length === 0 && users.length === 0) {
                 showNotification('Tidak ada data untuk diekspor', 'error');
@@ -989,8 +965,6 @@
 
         // ==================== INISIALISASI HALAMAN ====================
         async function initPage() {
-            if (!checkAccess()) return;
-
             try {
                 await initDatabase();
                 await loadRoles();
@@ -1001,15 +975,6 @@
                 renderRoleSelect();
                 renderRoleList();
                 renderUserList();
-
-                // Tampilkan nama user di suatu tempat (opsional)
-                const userNameDisplay = document.createElement('span');
-                userNameDisplay.id = 'user-name-display';
-                userNameDisplay.style.marginLeft = '10px';
-                userNameDisplay.style.fontWeight = '600';
-                userNameDisplay.style.color = '#006B54';
-                userNameDisplay.textContent = currentUser.name;
-                document.querySelector('h2').appendChild(userNameDisplay);
 
                 if (typeof feather !== 'undefined') feather.replace();
             } catch (error) {
