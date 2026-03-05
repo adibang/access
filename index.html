@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>POSPLUS - User & Role Manager</title>
+    <title>MUDA - User & Role Manager</title>
     <!-- Feather Icons untuk ikon line art -->
     <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
     <style>
@@ -460,7 +460,7 @@
                 <div id="userList"></div>
             </div>
 
-            <!-- Tombol Ekspor -->
+            <!-- Tombol Ekspor (tetap dipertahankan) -->
             <button class="export-btn" onclick="exportData()">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -475,6 +475,15 @@
     <div id="notification" class="notification"></div>
 
     <script>
+        // ==================== KONFIGURASI DATABASE (sama dengan aplikasi utama) ====================
+        const DB_NAME = 'POSKasirDB';
+        const DB_VERSION = 22;
+        const STORES = {
+            USERS: 'users',
+            ROLES: 'roles',
+            SETTINGS: 'settings'
+        };
+
         // Daftar semua menu (harus sama dengan di index.html)
         const ALL_MENUS = [
             { id: 'menu-master', label: 'Master Data' },
@@ -483,27 +492,173 @@
             { id: 'menu-inventory', label: 'Inventory' },
             { id: 'menu-cust', label: 'Cust & Supl' },
             { id: 'menu-laporan', label: 'Laporan' },
-            { id: 'menu-sistem', label: 'Sistem' }
+            { id: 'menu-sistem', label: 'Sistem' },
+            { id: 'menu-bundle', label: 'Bundle' },
+            { id: 'menu-warehouse', label: 'Gudang' },
+            { id: 'menu-production', label: 'Produksi' },
+            { id: 'menu-consignment', label: 'Konsinyasi' }
         ];
 
-        // Data roles dan users
-        let roles = [
-            { id: 1, name: 'Admin', permissions: ALL_MENUS.map(m => m.id) },
-            { id: 2, name: 'Kasir', permissions: ['menu-transaksi', 'menu-cust'] }
-        ];
+
+        // Global variables
+        let db = null;
+        let roles = [];
         let users = [];
+        let currentUser = null;
 
-        // Inisialisasi: render permission checkboxes, role list, user list
-        function init() {
-            renderPermissionCheckboxes();
-            renderRoleSelect();
-            renderRoleList();
-            renderUserList();
-            // Ganti ikon feather
-            if (typeof feather !== 'undefined') feather.replace();
+        // ==================== FUNGSI DATABASE ====================
+        async function initDatabase() {
+            return new Promise((resolve, reject) => {
+                if (!window.indexedDB) {
+                    reject(new Error('Browser tidak mendukung IndexedDB'));
+                    return;
+                }
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onerror = (e) => reject(e.target.error);
+                request.onsuccess = (e) => {
+                    db = e.target.result;
+                    resolve();
+                };
+                request.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(STORES.USERS)) {
+                        const store = db.createObjectStore(STORES.USERS, { keyPath: 'id', autoIncrement: true });
+                        store.createIndex('username', 'username', { unique: true });
+                    }
+                    if (!db.objectStoreNames.contains(STORES.ROLES)) {
+                        const store = db.createObjectStore(STORES.ROLES, { keyPath: 'id', autoIncrement: true });
+                        store.createIndex('name', 'name', { unique: true });
+                    }
+                    if (!db.objectStoreNames.contains(STORES.SETTINGS)) {
+                        db.createObjectStore(STORES.SETTINGS, { keyPath: 'key' });
+                    }
+                };
+            });
         }
 
-        // Render checkbox permission untuk tambah role
+        async function dbGetAll(storeName) {
+            return new Promise((resolve, reject) => {
+                if (!db) { reject(new Error('Database not initialized')); return; }
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const request = store.getAll();
+                request.onsuccess = () => resolve(request.result || []);
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        async function dbAdd(storeName, data) {
+            return new Promise((resolve, reject) => {
+                if (!db) { reject(new Error('Database not initialized')); return; }
+                const tx = db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const request = store.add(data);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        async function dbPut(storeName, data) {
+            return new Promise((resolve, reject) => {
+                if (!db) { reject(new Error('Database not initialized')); return; }
+                const tx = db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const request = store.put(data);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        async function dbDelete(storeName, key) {
+            return new Promise((resolve, reject) => {
+                if (!db) { reject(new Error('Database not initialized')); return; }
+                const tx = db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const request = store.delete(key);
+                request.onsuccess = () => resolve();
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        // ==================== FUNGSI UTILITAS ====================
+        async function hashPassword(password) {
+            const salt = 'pos_kasir_salt_v2_2024';
+            const saltedPassword = salt + password + salt;
+            if (window.crypto && window.crypto.subtle) {
+                try {
+                    const encoder = new TextEncoder();
+                    const data = encoder.encode(saltedPassword);
+                    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                    const hashArray = Array.from(new Uint8Array(hashBuffer));
+                    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                } catch (e) { console.warn('Crypto digest failed', e); }
+            }
+            let hash = 0;
+            for (let i = 0; i < saltedPassword.length; i++) {
+                const char = saltedPassword.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash |= 0;
+            }
+            return hash.toString(16);
+        }
+
+        function showNotification(msg, type = 'success') {
+            const notif = document.getElementById('notification');
+            notif.textContent = msg;
+            notif.style.backgroundColor = type === 'success' ? '#006B54' : '#dc3545';
+            notif.style.display = 'block';
+            setTimeout(() => { notif.style.display = 'none'; }, 2000);
+        }
+
+        function sanitizeHTML(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // ==================== CEK LOGIN & PERMISSION ====================
+        function checkAccess() {
+            const savedUser = sessionStorage.getItem('currentUser');
+            if (!savedUser) {
+                alert('Anda harus login terlebih dahulu.');
+                window.location.href = 'index.html';
+                return false;
+            }
+            try {
+                currentUser = JSON.parse(savedUser);
+                if (!currentUser.permissions || !currentUser.permissions.includes('menu-sistem')) {
+                    alert('Anda tidak memiliki akses ke halaman ini.');
+                    window.location.href = 'index.html';
+                    return false;
+                }
+                return true;
+            } catch (e) {
+                window.location.href = 'index.html';
+                return false;
+            }
+        }
+
+        // ==================== LOAD DATA DARI DATABASE ====================
+        async function loadRoles() {
+            roles = await dbGetAll(STORES.ROLES);
+            // Pastikan role default ada
+            if (roles.length === 0) {
+                const adminRole = { name: 'Admin', permissions: ALL_MENUS.map(m => m.id) };
+                const kasirRole = { name: 'Kasir', permissions: ['menu-transaksi', 'menu-cust'] };
+                const adminId = await dbAdd(STORES.ROLES, adminRole);
+                const kasirId = await dbAdd(STORES.ROLES, kasirRole);
+                adminRole.id = adminId;
+                kasirRole.id = kasirId;
+                roles = [adminRole, kasirRole];
+            }
+        }
+
+        async function loadUsers() {
+            users = await dbGetAll(STORES.USERS);
+        }
+
+        // ==================== RENDER UI ====================
         function renderPermissionCheckboxes(selectedPerms = []) {
             const container = document.getElementById('permissionCheckboxes');
             let html = '';
@@ -519,7 +674,6 @@
             container.innerHTML = html;
         }
 
-        // Render select role untuk form user
         function renderRoleSelect(selectedId = null) {
             const select = document.getElementById('roleSelect');
             select.innerHTML = '';
@@ -532,7 +686,6 @@
             });
         }
 
-        // Render daftar role
         function renderRoleList() {
             const container = document.getElementById('roleList');
             if (roles.length === 0) {
@@ -548,7 +701,7 @@
                 html += `
                     <div class="list-item">
                         <div class="info">
-                            <strong>${role.name}</strong> <span style="color:#666; font-size:0.8rem;">(ID: ${role.id})</span>
+                            <strong>${sanitizeHTML(role.name)}</strong> <span style="color:#666; font-size:0.8rem;">(ID: ${role.id})</span>
                             <small>Permission: ${permLabels}</small>
                         </div>
                         <div class="actions">
@@ -576,7 +729,6 @@
             if (typeof feather !== 'undefined') feather.replace();
         }
 
-        // Render daftar user
         function renderUserList() {
             const container = document.getElementById('userList');
             if (users.length === 0) {
@@ -589,11 +741,11 @@
                 html += `
                     <div class="list-item">
                         <div class="info">
-                            <strong>${user.name}</strong> <span style="color:#666;">(@${user.username})</span><br>
-                            <small>Role: ${roleName}</small>
+                            <strong>${sanitizeHTML(user.name)}</strong> <span style="color:#666;">(@${sanitizeHTML(user.username)})</span><br>
+                            <small>Role: ${sanitizeHTML(roleName)}</small>
                         </div>
                         <div class="actions">
-                            <button class="delete-btn" onclick="removeUser(${index})">
+                            <button class="delete-btn" onclick="removeUser(${user.id})">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <polyline points="3 6 5 6 21 6"></polyline>
                                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -608,95 +760,43 @@
             if (typeof feather !== 'undefined') feather.replace();
         }
 
-        // Notifikasi
-        function showNotification(msg, type = 'success') {
-            const notif = document.getElementById('notification');
-            notif.textContent = msg;
-            notif.style.backgroundColor = type === 'success' ? '#006B54' : '#dc3545';
-            notif.style.display = 'block';
-            setTimeout(() => { notif.style.display = 'none'; }, 2000);
-        }
-
-        // Hash password (sama dengan di index.html)
-        async function hashPassword(password) {
-            if (window.crypto && window.crypto.subtle) {
-                try {
-                    const encoder = new TextEncoder();
-                    const data = encoder.encode(password);
-                    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-                    const hashArray = Array.from(new Uint8Array(hashBuffer));
-                    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-                } catch (e) { console.warn('Crypto digest failed, using fallback', e); }
-            }
-            let hash = 0;
-            for (let i = 0; i < password.length; i++) {
-                const char = password.charCodeAt(i);
-                hash = ((hash << 5) - hash) + char;
-                hash |= 0;
-            }
-            return hash.toString(16);
-        }
-
-        // Fungsi untuk toggle visibility password
-        window.togglePasswordVisibility = function(inputId, btn) {
-            const input = document.getElementById(inputId);
-            const type = input.getAttribute('type') === 'password' ? 'text' : 'password';
-            input.setAttribute('type', type);
-            // Ubah ikon mata (gunakan SVG yang berbeda atau ganti dengan icon eye-off)
-            const svg = btn.querySelector('svg');
-            if (type === 'text') {
-                // mata terbuka -> ganti dengan ikon mata tertutup (eye-off)
-                svg.innerHTML = `
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                    <line x1="1" y1="1" x2="23" y2="23"></line>
-                `;
-            } else {
-                // mata tertutup -> kembalikan ke ikon mata biasa
-                svg.innerHTML = `
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                `;
-            }
-            feather.replace(); // refresh ikon
-        };
-
-        // ==================== ROLE CRUD ====================
-        function addRole() {
+        // ==================== FUNGSI CRUD ROLE ====================
+        window.addRole = async function() {
             const name = document.getElementById('roleName').value.trim();
             if (!name) {
                 showNotification('Nama role harus diisi', 'error');
                 return;
             }
-            // Cek duplikasi nama
             if (roles.some(r => r.name.toLowerCase() === name.toLowerCase())) {
                 showNotification('Nama role sudah ada', 'error');
                 return;
             }
-            // Ambil permission yang dicentang
             const checkboxes = document.querySelectorAll('#permissionCheckboxes input[type="checkbox"]');
             const permissions = [];
-            checkboxes.forEach(cb => {
-                if (cb.checked) permissions.push(cb.value);
-            });
-            // Cari id baru (angka tertinggi + 1)
-            const newId = roles.length > 0 ? Math.max(...roles.map(r => r.id)) + 1 : 3;
+            checkboxes.forEach(cb => { if (cb.checked) permissions.push(cb.value); });
+
             const now = new Date().toISOString();
-            roles.push({
-                id: newId,
+            const newRole = {
                 name: name,
                 permissions: permissions,
                 createdAt: now,
                 updatedAt: now
-            });
-            // Reset form
-            document.getElementById('roleName').value = '';
-            renderPermissionCheckboxes([]);
-            renderRoleSelect();
-            renderRoleList();
-            showNotification('Role ditambahkan');
-        }
+            };
+            try {
+                const id = await dbAdd(STORES.ROLES, newRole);
+                newRole.id = id;
+                roles.push(newRole);
+                document.getElementById('roleName').value = '';
+                renderPermissionCheckboxes([]);
+                renderRoleSelect();
+                renderRoleList();
+                showNotification('Role ditambahkan');
+            } catch (error) {
+                showNotification('Gagal menambah role: ' + error.message, 'error');
+            }
+        };
 
-        function editRole(roleId) {
+        window.editRole = async function(roleId) {
             const role = roles.find(r => r.id === roleId);
             if (!role) return;
             const newName = prompt('Edit nama role:', role.name);
@@ -707,44 +807,68 @@
                 }
                 role.name = newName.trim();
                 role.updatedAt = new Date().toISOString();
-                renderRoleList();
-                renderRoleSelect();
-                showNotification('Role diperbarui');
+                try {
+                    await dbPut(STORES.ROLES, role);
+                    renderRoleList();
+                    renderRoleSelect();
+                    showNotification('Role diperbarui');
+                } catch (error) {
+                    showNotification('Gagal update role: ' + error.message, 'error');
+                }
             }
-        }
+        };
 
-        function deleteRole(roleId) {
+        window.deleteRole = async function(roleId) {
             if (!confirm('Hapus role ini? User dengan role ini akan kehilangan role.')) return;
             // Update user yang menggunakan role ini menjadi null
-            users.forEach(u => {
-                if (u.roleId === roleId) u.roleId = null;
-            });
+            for (let u of users) {
+                if (u.roleId === roleId) {
+                    u.roleId = null;
+                    await dbPut(STORES.USERS, u);
+                }
+            }
+            await loadUsers(); // reload users
             roles = roles.filter(r => r.id !== roleId);
+            await dbDelete(STORES.ROLES, roleId);
             renderRoleList();
             renderRoleSelect();
             renderUserList();
             showNotification('Role dihapus');
-        }
+        };
 
-        function resetRoles() {
+        window.resetRoles = async function() {
             if (!confirm('Reset role ke default (Admin & Kasir)? Semua role kustom akan hilang.')) return;
-            roles = [
-                { id: 1, name: 'Admin', permissions: ALL_MENUS.map(m => m.id) },
-                { id: 2, name: 'Kasir', permissions: ['menu-transaksi', 'menu-cust'] }
-            ];
+            // Hapus semua role
+            for (let r of roles) {
+                await dbDelete(STORES.ROLES, r.id);
+            }
+            // Buat default
+            const adminRole = { name: 'Admin', permissions: ALL_MENUS.map(m => m.id) };
+            const kasirRole = { name: 'Kasir', permissions: ['menu-transaksi', 'menu-cust'] };
+            const adminId = await dbAdd(STORES.ROLES, adminRole);
+            const kasirId = await dbAdd(STORES.ROLES, kasirRole);
+            adminRole.id = adminId;
+            kasirRole.id = kasirId;
+            roles = [adminRole, kasirRole];
+
             // Set user yang menggunakan role di luar 1/2 menjadi null
-            users.forEach(u => {
-                if (u.roleId !== 1 && u.roleId !== 2) u.roleId = null;
-            });
+            for (let u of users) {
+                if (u.roleId !== adminId && u.roleId !== kasirId) {
+                    u.roleId = null;
+                    await dbPut(STORES.USERS, u);
+                }
+            }
+            await loadUsers();
+
             renderPermissionCheckboxes([]);
             renderRoleSelect();
             renderRoleList();
             renderUserList();
             showNotification('Role direset');
-        }
+        };
 
-        // ==================== USER CRUD ====================
-        async function addUser() {
+        // ==================== FUNGSI CRUD USER ====================
+        window.addUser = async function() {
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value.trim();
             const confirmPassword = document.getElementById('confirmPassword').value.trim();
@@ -767,54 +891,69 @@
             const hashed = await hashPassword(password);
             const now = new Date().toISOString();
 
-            users.push({
+            const newUser = {
                 username,
                 password: hashed,
                 name,
                 roleId,
                 createdAt: now,
                 updatedAt: now
-            });
+            };
 
-            // Reset form
-            document.getElementById('username').value = '';
-            document.getElementById('password').value = '';
-            document.getElementById('confirmPassword').value = '';
-            document.getElementById('fullname').value = '';
+            try {
+                const id = await dbAdd(STORES.USERS, newUser);
+                newUser.id = id;
+                users.push(newUser);
+                document.getElementById('username').value = '';
+                document.getElementById('password').value = '';
+                document.getElementById('confirmPassword').value = '';
+                document.getElementById('fullname').value = '';
+                renderUserList();
+                showNotification('User ditambahkan');
+            } catch (error) {
+                showNotification('Gagal menambah user: ' + error.message, 'error');
+            }
+        };
 
-            renderUserList();
-            showNotification('User ditambahkan');
-        }
+        window.removeUser = async function(userId) {
+            if (!confirm('Hapus user ini?')) return;
+            try {
+                await dbDelete(STORES.USERS, userId);
+                users = users.filter(u => u.id !== userId);
+                renderUserList();
+                showNotification('User dihapus');
+            } catch (error) {
+                showNotification('Gagal hapus user: ' + error.message, 'error');
+            }
+        };
 
-        function removeUser(index) {
-            users.splice(index, 1);
-            renderUserList();
-            showNotification('User dihapus');
-        }
-
-        function clearUsers() {
+        window.clearUsers = async function() {
             if (users.length === 0) return;
-            if (confirm('Hapus semua user?')) {
+            if (!confirm('Hapus semua user?')) return;
+            try {
+                for (let u of users) {
+                    await dbDelete(STORES.USERS, u.id);
+                }
                 users = [];
                 renderUserList();
                 showNotification('Semua user dihapus');
+            } catch (error) {
+                showNotification('Gagal hapus semua user: ' + error.message, 'error');
             }
-        }
+        };
 
-        // ==================== EKSPOR ====================
-        function exportData() {
+        // ==================== FUNGSI EKSPOR (sesuai dengan aplikasi utama) ====================
+        window.exportData = async function() {
             if (roles.length === 0 && users.length === 0) {
                 showNotification('Tidak ada data untuk diekspor', 'error');
                 return;
             }
-
             const exportData = {
                 roles: roles,
                 users: users,
                 exportDate: new Date().toISOString(),
-                version: 19 // versi database terbaru (sesuai aplikasi utama)
+                version: DB_VERSION
             };
-
             const dataStr = JSON.stringify(exportData, null, 2);
             const blob = new Blob([dataStr], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -826,10 +965,61 @@
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
             showNotification('File berhasil diunduh');
+        };
+
+        // ==================== FUNGSI TOGGLE PASSWORD ====================
+        window.togglePasswordVisibility = function(inputId, btn) {
+            const input = document.getElementById(inputId);
+            const type = input.getAttribute('type') === 'password' ? 'text' : 'password';
+            input.setAttribute('type', type);
+            const svg = btn.querySelector('svg');
+            if (type === 'text') {
+                svg.innerHTML = `
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                `;
+            } else {
+                svg.innerHTML = `
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                `;
+            }
+            if (typeof feather !== 'undefined') feather.replace();
+        };
+
+        // ==================== INISIALISASI HALAMAN ====================
+        async function initPage() {
+            if (!checkAccess()) return;
+
+            try {
+                await initDatabase();
+                await loadRoles();
+                await loadUsers();
+
+                // Render UI
+                renderPermissionCheckboxes([]);
+                renderRoleSelect();
+                renderRoleList();
+                renderUserList();
+
+                // Tampilkan nama user di suatu tempat (opsional)
+                const userNameDisplay = document.createElement('span');
+                userNameDisplay.id = 'user-name-display';
+                userNameDisplay.style.marginLeft = '10px';
+                userNameDisplay.style.fontWeight = '600';
+                userNameDisplay.style.color = '#006B54';
+                userNameDisplay.textContent = currentUser.name;
+                document.querySelector('h2').appendChild(userNameDisplay);
+
+                if (typeof feather !== 'undefined') feather.replace();
+            } catch (error) {
+                console.error('Init error:', error);
+                showNotification('Gagal memuat data: ' + error.message, 'error');
+            }
         }
 
-        // Jalankan init saat halaman dimuat
-        window.onload = init;
+        // Mulai setelah halaman siap
+        window.onload = initPage;
     </script>
 </body>
 </html>
